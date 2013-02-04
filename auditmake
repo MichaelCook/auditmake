@@ -1,0 +1,392 @@
+#!/usr/bin/perl
+#
+# Check makefiles for missing prerequisites.
+#
+# See README.md for more information.
+#
+
+#
+# Copyright (c) 2013, Raytheon BBN Technologies.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of the Raytheon BBN Technologies nor the
+#       names of its contributors may be used to endorse or promote products
+#       derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL RAYTHEON BBN TECHNOLOGIES BE LIABLE FOR
+# ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+# DAMAGE.
+#
+
+# Author: Michael Cook <mcook@bbn.com>
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Cwd;
+
+my ($THIS) = $0 =~ m%([^/]+)$%;	# this script's name for error messages
+my $USAGE = "usage: $THIS \"\$@ \$*\" \"commands...\"\n";
+
+my @IGNORE;
+my @SKIP;
+my @ONLY;
+my $DEBUG;
+#$DEBUG = 1;
+
+if ($DEBUG) {
+    warn "> --- argc ", 0 + @ARGV, "\n";
+    for my $i (0..@ARGV-1) {
+	warn "> [$i] {{{", $ARGV[$i], "}}}\n";
+    }
+    warn "> ---\n";
+}
+
+Getopt::Long::config("bundling", "require_order");
+GetOptions
+("ignore=s" => \@IGNORE,
+ #
+ # Ignore files that match these patterns.
+ # The pattern is matched against the absolute path name.
+ # Example:
+ #   --ignore='^/(proc|lib|sys|etc|dev|tmp)($|/)'
+ #
+
+ "only=s" => \@ONLY,
+ #
+ # Ignore files that don't match these patterns.
+ #
+
+ "skip=s" => \@SKIP,
+ #
+ # Don't analyze directories that match these patterns.
+ #
+
+ "debug!" => \$DEBUG,
+ #
+ # Debug mode.
+ #
+)
+or die $USAGE;
+
+@ARGV == 2 or die "expected two arguments: ", @ARGV + 0, " @ARGV";
+
+my @files = split / /, shift;
+if ($DEBUG) {
+    warn "> --- file {$_}\n"
+	for @files;
+}
+my $commands = shift;
+
+my $srcroot = shift @files;
+push @ONLY, '^' . quotemeta($srcroot) . '($|/)';
+
+my $IGNORE;
+$IGNORE = join("|", @IGNORE)
+    if @IGNORE;
+
+my $ONLY;
+$ONLY = join("|", @ONLY)
+    if @ONLY;
+
+my $SKIP;
+$SKIP = join("|", @SKIP)
+    if @SKIP;
+
+# If $path isn't an absolute path, then add $dir as a prefix.
+# Then remove ".", ".." and redundant slashes.
+sub absolute {
+    my ($dir, $path) = @_;
+
+    $path = "$dir/$path"
+	unless $path =~ m%^/%;
+
+    my @new;
+    for (split "/", $path) {
+	next if $_ eq ".";
+	next if $_ eq "";
+	if ($_ eq "..") {
+	    pop @new;
+	    next;
+	}
+	push @new, $_;
+    }
+    return join("/", "", @new);
+}
+
+my $SILENT;
+
+sub run_commands {
+    my (@prefix_args) = @_;
+
+    $commands =~ s/\\\n//g;
+    for (split /\n/, $commands) {
+	my $errok;
+	my $silent = $SILENT;
+	for (;;) {
+	    $silent = 1, next if s/^\@//;
+	    $errok = 1, next if s/^-//;
+	    last;
+	}
+	warn "$_\n"
+	    unless $silent;
+	my @cmd = (@prefix_args, "/bin/sh", "-c", $_);
+	warn "> command '", join("' '", @cmd), "'\n" if $DEBUG;
+	system @cmd;
+	if ($?) {
+	    my $sig = $? & 0x7F;
+	    if ($sig) {
+		warn "signal $sig", $? & 0x80 ? " (core dumped)" : "", "\n";
+		exit 128 + $sig;
+	    }
+	    my $exit = $? >> 8;
+	    unless ($errok) {
+		warn "exit $exit\n";
+		exit $exit;
+	    }
+	    warn "*** Error $exit (ignored)\n";
+	}
+    }
+}
+
+sub skip {
+    warn "> not tracing, @_\n" if $DEBUG;
+    run_commands;
+    exit 0;
+}
+
+my $cwd = getcwd;
+warn "> cwd $cwd\n" if $DEBUG;
+
+my $target = shift @files;
+warn "> target ", $target // "(none)", "\n" if $DEBUG;
+unless ($target) {
+    $SILENT = 1;
+    skip "no target";
+}
+$target = absolute($cwd, $target);
+
+# \todo This =~ check should try to be more precise.  If $MAKE is simply
+# "make", this check match some commands that aren't actually recursive
+# invocations.
+my $make = $ENV{MAKE} // die "no \$MAKE";
+warn "> MAKE=$make\n" if $DEBUG;
+skip "recursive make"
+    if $commands =~ /\Q$make/;
+
+skip "matches skip pattern"
+    if @SKIP && $target =~ /$SKIP/o;
+
+# It's a common hack to add a .PHONY target named "force" to force make to
+# rebuild the target every time.  Don't analyze these rules.
+skip "has force flag"
+    if grep /^force$/i, @files;
+
+my $tmp = "/tmp/auditmake-$$";
+warn "> dir $tmp\n" if $DEBUG;
+
+sub cleanup {
+    system "rm", "-rf", $tmp
+	if $tmp && ! $DEBUG;
+}
+
+sub catch_signal {
+    cleanup;
+    exit(1);
+}
+
+$SIG{TERM} = \&catch_signal;
+$SIG{INT} = \&catch_signal;
+$SIG{HUP} = \&catch_signal;
+$SIG{PIPE} = \&catch_signal;
+END { cleanup }
+
+system "mkdir", $tmp
+    and die "mkdir $tmp failed";
+
+run_commands "strace", -e => "trace=file,process", "-ff", -o => "$tmp/t";
+
+my @out = glob "$tmp/t.*";
+@out or die;
+
+#
+# First pass: find the parent/child relationship of all processes.  This
+# wouldn't be necessary if we could assume a child's PID is always greater
+# than the parent's PID, but that's not true when PIDs wrap.
+#
+my %syscalls;   # {name} = number of times this syscall was called.
+my %parent_of;  # {pid} = pid
+for my $out (@out) {
+    warn "> out $out\n" if $DEBUG;
+    open my $fh, $out
+	or die "open $out: $!";
+    my ($pid) = $out =~ /\.(\d+)$/;
+    warn ">  pid $pid\n" if $DEBUG;
+    while (<$fh>) {
+	chomp;
+	my ($syscall) = /^(\w+)\(/;
+	unless (defined $syscall) {
+	    warn ">  unmatched {$_}\n" if $DEBUG;
+	    next;
+	}
+	$syscalls{$syscall}++;
+	if ($syscall eq "clone") {
+	    my ($kid) = / = (\d+)$/ or die;
+	    warn ">  clone $kid from $pid\n" if $DEBUG;
+	    $parent_of{$kid} = $pid;
+	}
+    }
+}
+if ($DEBUG) {
+    for my $syscall (sort keys %syscalls) {
+	warn sprintf "> %6d %s\n", $syscalls{$syscall}, $syscall;
+    }
+}
+
+# Match failed syscalls such as:
+# ...) = -1 ENOENT (No such file or directory)
+my $ERR = qr/\) += -1 E[A-Z0-9]+ \([ \w]+\)$/;
+
+#
+# Second pass: Do each process' trace, but only after having done its parent
+# (if any) so we can know the initial directory of each proces.
+#
+my %did;	# {pid} = true if we did this process' trace already.
+my %dir_of_pid; # {pid} = initial directory of this process.
+my %used;       # {file} = true if this file was used.
+sub process;
+sub process {
+    my ($pid) = @_;
+    return if $did{$pid}++;
+    my $parent = $parent_of{$pid};
+    process $parent
+	if $parent;
+    my $dir = $dir_of_pid{$pid} // $cwd;
+    warn ">  process $pid in $dir\n" if $DEBUG;
+
+    my $out = "$tmp/t.$pid";
+    open my $fh, $out
+	or die "open $out: $!";
+    while (<$fh>) {
+	chomp;
+
+	s/^openat\(AT_FDCWD, /open(/;
+
+	my ($syscall) = /^(\w+)\(/;
+	unless (defined $syscall) {
+	    warn ">  unmatched {$_}\n" if $DEBUG;
+	    next;
+	}
+
+	if ($syscall eq "open") {
+	    next if /$ERR/o;
+	    next if /\bO_DIRECTORY\b/;
+	    next if /\bO_TRUNC\b/;
+	    next if /\bO_WRONLY\b/;
+	    my ($file) = /\"(.*?)\"/ or die;
+	    my $abs = absolute($dir, $file);
+	    next if @IGNORE && $abs =~ /$IGNORE/o;
+	    next if @ONLY && $abs !~ /$ONLY/o;
+	    warn ">  open |$file| => |$abs|\n" if $DEBUG;
+	    $used{$abs} = 1;
+	    next;
+	}
+
+	if ($syscall eq "getcwd") {
+	    next if /$ERR/o;
+	    ($dir) = /\"(.*?)\"/ or die;
+	    warn ">  getcwd |$dir|\n" if $DEBUG;
+	    next;
+	}
+
+	if ($syscall eq "clone") {
+	    next if /$ERR/o;
+	    my ($kid) = / = (\d+)$/ or die;
+	    $dir_of_pid{$kid} = $dir;
+	    warn ">  clone $kid in $dir\n" if $DEBUG;
+	    next;
+	}
+
+	if ($syscall eq "chdir") {
+	    next if /$ERR/o;
+	    ($dir) = /\"(.*?)\"/ or die;
+	    warn ">  chdir $dir\n" if $DEBUG;
+	    next;
+	}
+    }
+}
+for my $out (@out) {
+    warn "> out $out\n" if $DEBUG;
+    open my $fh, $out
+	or die "open $out: $!";
+    my ($pid) = $out =~ /\.(\d+)$/;
+    warn ">  pid $pid\n" if $DEBUG;
+    process $pid;
+}
+
+my %stat;
+sub get_stat {
+    my ($file) = @_;
+    return $stat{$file}
+	if exists $stat{$file};
+    my ($dev, $ino) = stat $file;
+    return $stat{$file} = undef
+	unless defined $dev;
+    return $stat{$file} = "$dev,$ino";
+}
+
+sub is_same_file {
+    my ($a, $b) = @_;
+    my $aa = get_stat($a);
+    my $bb = get_stat($b);
+    return $aa && $bb && $aa eq $bb;
+}
+
+unless (get_stat $target) {
+    warn "> assuming target .PHONY: $target\n" if $DEBUG;
+    exit 0;
+}
+
+#
+# Check for files that we used but that aren't listed as a prerequisite.
+#
+my @missing;
+USED:
+for my $used (keys %used) {
+    warn "> used $used\n" if $DEBUG;
+    unless (get_stat($used)) {
+	warn "> $target used $used which doesn't exist any more\n" if $DEBUG;
+	# Assume this was a temporary file.
+	next;
+    }
+    next if is_same_file($used, $target);
+    for my $pre (@files) {
+	warn "> pre $pre\n" if $DEBUG;
+	if (is_same_file($used, $pre)) {
+	    warn "> same file |$used| and |$pre|\n" if $DEBUG;
+	    next USED;
+	}
+    }
+    push @missing, $used;
+}
+if (@missing) {
+    print "$THIS: $target used the following without specifying",
+	" as prerequisite:\n";
+    print "  $_\n"
+	for sort @missing;
+}
