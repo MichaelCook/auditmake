@@ -332,8 +332,6 @@ sub process {
 }
 for my $out (@out) {
     warn "> out $out\n" if $DEBUG;
-    open my $fh, $out
-	or die "open $out: $!";
     my ($pid) = $out =~ /\.(\d+)$/;
     warn ">  pid $pid\n" if $DEBUG;
     process $pid;
