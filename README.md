@@ -114,3 +114,10 @@ the following message:
 	[ Process PID=7569 runs in 32 bit mode. ]
 
 strace doesn't fail, it just doesn't generate the trace.
+
+auditmake uses a heuristic to avoid analyzing .PHONY targets: after running
+commands to build a target, if the target does not exist, auditmake assumes
+the target was .PHONY.  In this case auditmake does not analyze the strace
+output.  If the target was .PHONY but the target actually exists anyhow, the
+heuristic fails.  auditmake will mistakenly analyze the strace output and tend
+to report some false missing prerequisites.
