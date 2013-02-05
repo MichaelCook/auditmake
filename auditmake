@@ -34,6 +34,7 @@
 #
 
 # Author: Michael Cook <mcook@bbn.com>
+# See: https://github.com/MichaelCook/auditmake
 
 use strict;
 use warnings;
