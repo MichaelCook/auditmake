@@ -77,7 +77,7 @@ example:
 	  find -name \*.d | tar -czf saved.tar.gz --files-from -
 	  make clean
 	  tar -xzf saved.tar.gz
-	  export MAKE=/usr/local/bin/make-3.82/bin/make
+	  export MAKE=/usr/local/make-3.82/bin/make
 	  $MAKE AUDITMAKE=1
 
 If auditmake finds any missing prerequisites, you'll see output like the
