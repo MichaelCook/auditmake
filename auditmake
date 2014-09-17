@@ -183,7 +183,7 @@ unless ($target) {
 $target = absolute($cwd, $target);
 
 # \todo This =~ check should try to be more precise.  If $MAKE is simply
-# "make", this check match some commands that aren't actually recursive
+# "make", this check matches some commands that aren't actually recursive
 # invocations.
 my $make = $ENV{MAKE} // die "no \$MAKE";
 warn "> MAKE=$make\n" if $DEBUG;
