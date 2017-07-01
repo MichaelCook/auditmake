@@ -33,7 +33,7 @@
 # DAMAGE.
 #
 
-# Author: Michael Cook <mcook@bbn.com>
+# Author: Michael Cook <michael@waxrat.com>
 # See: https://github.com/MichaelCook/auditmake
 
 use strict;
