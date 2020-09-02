@@ -198,7 +198,7 @@ skip "matches skip pattern"
 skip "has force flag"
     if grep /^force$/i, @files;
 
-my $tmp = "/tmp/auditmake-$$";
+my $tmp = "/run/shm/auditmake-$$";
 warn "> dir $tmp\n" if $DEBUG;
 
 sub cleanup {
